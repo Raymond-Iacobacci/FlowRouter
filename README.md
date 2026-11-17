@@ -9,7 +9,7 @@ Steps 1-3 are completed with `nomsc.py` and step 4 is completed with `msc.py`. T
 ## Command-line args
 nomsc.py:
 - Input circuit via ```--circuit CIRCUIT```.
-- Choose in- (edge-of) program MSC with ```--variant {basic,escape}```, resp.
+- Choose in- (edge-of) program MSC with ```--variant {basic,free_magic}```, resp.
 - Output block graph HTML with ```--html```.
 msc.py:
 - Choose distance simulation with ```--distance {11,13,15}```.

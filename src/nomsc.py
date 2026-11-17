@@ -55,9 +55,8 @@ def descent_success(baseline, trial):
 
 class Compiler:
     """Part A compiler, basic variant. All placement state lives on the instance; one Compiler compiles one circuit.
-    EscapeCompiler overrides the few places where the escape variant differs."""
+    FreeMagicCompiler overrides the few places where the free-magic variant differs."""
 
-    DEFAULT_CIRCUIT = 'adder_4q'
     USE_LSMAP = True
     ROUTED_CUBES_TYPE = set
     S_SPIDER_TYPE = 'blue'
@@ -79,7 +78,7 @@ class Compiler:
         self.active_columns = list(range(circuit.qubits))
         self.window_base_height, self.round_index = 0, 0
         self._descent_floor = None
-        self.frontier_gates, self._last_endpoint_columns, self.resynthesis_candidates = [], [], []
+        self.frontier_gates, self._last_endpoint_columns = [], []
         self._round_placed_z = {}
         self.routed_cubes = self.ROUTED_CUBES_TYPE()
         self.hadamard_cubes = set()
@@ -598,18 +597,6 @@ class Compiler:
                 break
             if not placed:
                 break
-        for _path, _count in finalized_augmentations:
-            if _count <= 0:
-                continue
-            _coords = cube_path(_path)
-            self.resynthesis_candidates.append({
-                'pair': (self.xy_to_qubit[_coords[0][:2]], self.xy_to_qubit[_coords[-1][:2]]),
-                'coords': _coords,
-                'count': _count,
-                'cx_metadata': self.cnot_path_metadata(_coords),
-                'zz_metadata': self.cnot_path_metadata(_coords, sink_face = 0),
-                'window_base_height': self.window_base_height,
-                'round': self.round_index})
         if not any_CNOT_gates_placed:
             if len(self.active_columns) == 2:
                 self.window_base_height += 1
@@ -626,7 +613,7 @@ class Compiler:
                 ('routed_cubes', 'set'), ('qubit_column_spiders', 'dict'),
                 ('spider_counts', 'dict'), ('hadamard_cubes', 'set'), ('_hadamard_z_by_xy', 'dict_of_lists'),
                 ('unplaced_gates', 'list'), ('unplaced_gate_ids', 'set'), ('_visible_heads', 'list'),
-                ('display_paths', 'list'), ('resynthesis_candidates', 'list'), ('t_gate_cubes', 'list'),
+                ('display_paths', 'list'), ('t_gate_cubes', 'list'),
                 ('t_gate_positions', 'dict'), ('s_gate_positions', 'dict'), ('s_machinery_cubes', 'dict'),
                 ('s_machinery_pipes', 'list'), ('s_gate_squares', 'list'), ('spider_endpoint_metadata', 'dict'),
                 ('routed_segment_pipe_types', 'dict'), ('cnot_event_by_gate_id', 'dict_of_dicts'))
@@ -722,9 +709,7 @@ class Compiler:
                 "t_gate_positions": {int(k): tuple(int(c) for c in v) for k, v in self.t_gate_positions.items()},
                 "s_gate_positions": {int(k): tuple(int(c) for c in v) for k, v in self.s_gate_positions.items()},
                 "s_gate_squares": [tuple(int(c) for c in anchor) for anchor in self.s_gate_squares],
-                **self._escape_pickle_entries(),
-                "resynthesis": {"source": "compiler_basic",
-                                "candidates": list({(c['pair'], c['coords']): c for c in reversed(self.resynthesis_candidates)}.values())},
+                **self._free_magic_pickle_entries(),
             }, fp)
         placed_graph.graph["routed_segment_pipe_types"] = dict(self.routed_segment_pipe_types)
         self._add_machinery(placed_graph.graph)
@@ -757,8 +742,8 @@ class Compiler:
             t_spider_by_event[int(_event_index)] = _spider_id
         return {"t_spiders": t_spider_by_event}
 
-    def _escape_pickle_entries(self):
-        """Extra pickle entries, inserted just before 'resynthesis'. The basic variant has none."""
+    def _free_magic_pickle_entries(self):
+        """Extra pickle entries, added at the end of the payload. The basic variant has none."""
         return {}
 
     def _add_machinery(self, graph):
@@ -767,14 +752,14 @@ class Compiler:
         graph["machinery_pipes"] = tuple(self.s_machinery_pipes)
 
 
-_ESCAPE_AXIS_LETTERS = ('i', 'j', 'k')
+_AXIS_LETTERS = ('i', 'j', 'k')
 
 
 class _VersionedSet(set):
     '''A set that stamps a global version every time it changes.
 
-    routed_cubes is the only thing the boundary-escape BFS reads out of the placement state, so a counter
-    that moves whenever it does is enough to know when the cached escape field is stale. _restore() swaps
+    routed_cubes is the only thing the free-magic BFS reads out of the placement state, so a counter
+    that moves whenever it does is enough to know when the cached free-magic field is stale. _restore() swaps
     the whole set for a snapshot, which can leave the size unchanged, so size is not a usable stamp.'''
     version = 0
 
@@ -792,9 +777,9 @@ for _name in ('add', 'update', 'clear', 'discard', 'remove', 'pop', 'difference_
 
 
 def _face0_orientation(kind):
-    return _ESCAPE_AXIS_LETTERS[kind.index('Z')]
+    return _AXIS_LETTERS[kind.index('Z')]
 
-def _bake_escape_geometry(t_cube, t_kind, chain):
+def _bake_free_magic_geometry(t_cube, t_kind, chain):
     '''Turn a walked chain of (from, to, axis, pipe type) steps into the cubes, pipes and port to instantiate.
 
     A cube's kind is read off the pipes touching it: a pipe on one axis pins the cube's other two letters,
@@ -829,11 +814,10 @@ def _bake_escape_geometry(t_cube, t_kind, chain):
     }
 
 
-class EscapeCompiler(Compiler):
-    """Escape variant: every T-gate needs an instantiable route from its red face out of the patch, qubits start on the
+class FreeMagicCompiler(Compiler):
+    """Free-magic variant: every T-gate needs an instantiable route from its red face out of the patch, qubits start on the
     snake (or a seeded random permutation), and S-gates keep the pre-fix colours."""
 
-    DEFAULT_CIRCUIT = 'graphstate_100'
     USE_LSMAP = False
     ROUTED_CUBES_TYPE = _VersionedSet
     S_SPIDER_TYPE = 'red'
@@ -844,13 +828,13 @@ class EscapeCompiler(Compiler):
 
     def __init__(self, circuit, module, write_html = False):
         super().__init__(circuit, module, write_html)
-        self.t_escape_cubes, self.t_escape_pipes, self.t_escape_ports = {}, [], []
-        self.escape_port_cells = set()
-        self.t_gate_escape_paths, self._escape_field_cache, self._escape_plan_cache = {}, {}, {}
+        self.t_free_magic_cubes, self.t_free_magic_pipes, self.t_free_magic_ports = {}, [], []
+        self.free_magic_port_cells = set()
+        self.t_gate_free_magic_paths, self._free_magic_field_cache, self._free_magic_plan_cache = {}, {}, {}
 
     def _tracked(self):
-        return super()._tracked() + (('t_gate_escape_paths', 'dict'), ('t_escape_cubes', 'dict'), ('t_escape_pipes', 'list'),
-                                     ('t_escape_ports', 'list'), ('escape_port_cells', 'set'))
+        return super()._tracked() + (('t_gate_free_magic_paths', 'dict'), ('t_free_magic_cubes', 'dict'), ('t_free_magic_pipes', 'list'),
+                                     ('t_free_magic_ports', 'list'), ('free_magic_port_cells', 'set'))
 
     def _h_column_open(self, x, y, z):
         return not any(self.qubit_column_spiders.get((x, y, z0), None) for z0 in range(z, self._window_hi()))
@@ -859,28 +843,28 @@ class EscapeCompiler(Compiler):
         return role == 'T' and self.available_t_gate_space(x, y, z) is None
 
     def _reserve_t_gate(self, t, x, y, z, cube, count):
-        """Claim the cube and instantiate the whole escape route: its cells, pipes and the open port at its end."""
-        escape = self.t_gate_escape_plan(x, y, z)
+        """Claim the cube and instantiate the whole free-magic route: its cells, pipes and the open port at its end."""
+        route_plan = self.t_gate_free_magic_plan(x, y, z)
         self.qubit_column_spiders[cube] = 'blue'
         self.spider_counts[cube] = count + 1
-        self.spider_endpoint_metadata[cube] = (escape['orientation'], 0)
-        self.routed_cubes.update(escape['route'])
-        self.t_escape_cubes.update(escape['cubes'])
-        self.t_escape_pipes.extend(escape['pipes'])
-        self.t_escape_ports.append((f'tinj_{len(self.t_escape_ports)}', escape['port'][0], escape['port'][1]))
-        self.escape_port_cells.add(escape['port'][0])
-        self.t_gate_escape_paths[self.t_event_index_by_gate_id[id(t)]] = escape['route']
+        self.spider_endpoint_metadata[cube] = (route_plan['orientation'], 0)
+        self.routed_cubes.update(route_plan['route'])
+        self.t_free_magic_cubes.update(route_plan['cubes'])
+        self.t_free_magic_pipes.extend(route_plan['pipes'])
+        self.t_free_magic_ports.append((f'tinj_{len(self.t_free_magic_ports)}', route_plan['port'][0], route_plan['port'][1]))
+        self.free_magic_port_cells.add(route_plan['port'][0])
+        self.t_gate_free_magic_paths[self.t_event_index_by_gate_id[id(t)]] = route_plan['route']
 
     def available_t_gate_space(self, x, y, z):
         """The whole route out of the patch, or None when no instantiable route exists from this cube."""
-        plan = self.t_gate_escape_plan(x, y, z)
+        plan = self.t_gate_free_magic_plan(x, y, z)
         return None if plan is None else list(plan['route'])
 
     def _program_ceiling(self):
-        '''The top of the box the escape BFS runs inside: the highest z anything has been committed at.'''
+        '''The top of the box the free-magic BFS runs inside: the highest z anything has been committed at.'''
         return max([self._window_hi() - 1, *(cell[2] for cell in self.routed_cubes), *(cell[2] for cell in self.qubit_column_spiders)])
 
-    def _boundary_escape_field(self):
+    def _free_magic_field(self):
         '''Parent pointers of a BFS grown inward from the patch's four vertical walls over free space.
 
         A T-state is cultivated off-patch, so the injection can only attach to a red face that free space
@@ -895,11 +879,11 @@ class EscapeCompiler(Compiler):
         worldlines occupy their square at every height.
 
         This is free space only -- it knows nothing about pipe types, so it can say a cell has no way out but
-        never that a route is instantiable. It is the cheap filter in front of bake_t_gate_escape(), which is
+        never that a route is instantiable. It is the cheap filter in front of bake_t_gate_free_magic(), which is
         what actually decides a placement.'''
         ceiling = self._program_ceiling()
         key = (_VersionedSet.version, ceiling)
-        cached = self._escape_field_cache.get(key)
+        cached = self._free_magic_field_cache.get(key)
         if cached is not None:
             return cached
         cell_free = self._cell_free_test(ceiling)
@@ -917,13 +901,13 @@ class EscapeCompiler(Compiler):
                 if nbr not in parents and cell_free(nbr):
                     parents[nbr] = cell
                     queue.append(nbr)
-        self._escape_field_cache.clear()
-        self._escape_field_cache[key] = parents
+        self._free_magic_field_cache.clear()
+        self._free_magic_field_cache[key] = parents
         return parents
 
-    def t_gate_escape_route(self, cell):
+    def t_gate_free_magic_route(self, cell):
         '''The route from a red-face cell to the boundary, or None when free space does not reach it.'''
-        parents = self._boundary_escape_field()
+        parents = self._free_magic_field()
         if cell not in parents:
             return None
         route, step = [cell], parents[cell]
@@ -932,7 +916,7 @@ class EscapeCompiler(Compiler):
             step = parents[step]
         return tuple(route)
 
-    def bake_t_gate_escape(self, x, y, z):
+    def bake_t_gate_free_magic(self, x, y, z):
         '''Walk a T-gate's injection route from its red face out of the patch, and return the geometry it takes.
 
         The route is not an annotation on the placement, it IS part of it: the cubes and pipes below are
@@ -952,9 +936,9 @@ class EscapeCompiler(Compiler):
         hands it over, and it is why the top and the bottom of the box are not exits -- those are the start
         and the end of the computation, not somewhere a factory can stand.'''
         injection_axis = 1 if self.hadamard_parity(x, y, z) == 1 else 0
-        orientation = self.module.endpoint_orientation(_ESCAPE_AXIS_LETTERS[injection_axis])
+        orientation = self.module.endpoint_orientation(_AXIS_LETTERS[injection_axis])
         t_kind = canonical_node_tqec(orientation, 0)
-        start_type = RULE_S.get((0, orientation, _ESCAPE_AXIS_LETTERS[injection_axis]))
+        start_type = RULE_S.get((0, orientation, _AXIS_LETTERS[injection_axis]))
         if t_kind is None or start_type is None:
             return None
         if self.spider_endpoint_metadata.get((x, y, z), (orientation, 0)) != (orientation, 0):
@@ -964,14 +948,14 @@ class EscapeCompiler(Compiler):
         def step(cell, axis, sign):
             return tuple(c + (sign if a == axis else 0) for a, c in enumerate(cell))
         def turned(pipe_type, axis, next_axis):
-            return pipe_type if axis == next_axis else RULES.get((pipe_type, _ESCAPE_AXIS_LETTERS[axis], _ESCAPE_AXIS_LETTERS[next_axis]))
+            return pipe_type if axis == next_axis else RULES.get((pipe_type, _AXIS_LETTERS[axis], _AXIS_LETTERS[next_axis]))
         def exits(cell, axis, pipe_type):
             '''The ways this cell can leave the box, straight on first so a route does not turn for no reason.'''
             walls = [(a, -1) for a in (0, 1) if cell[a] == 0] + [(a, 1) for a in (0, 1) if cell[a] == (self.nx, self.ny)[a] - 1]
             for exit_axis, sign in sorted(walls, key = lambda wall: wall[0] != axis):
                 exit_type = turned(pipe_type, axis, exit_axis)
                 port_cell = step(cell, exit_axis, sign)
-                if exit_type is not None and port_cell not in self.escape_port_cells:
+                if exit_type is not None and port_cell not in self.free_magic_port_cells:
                     yield (cell, port_cell, exit_axis, exit_type)
         queue, seen = deque(), set()
         for sign in (-1, 1):
@@ -984,7 +968,7 @@ class EscapeCompiler(Compiler):
         while queue:
             (cell, axis, pipe_type), chain = queue.popleft()
             for exit_step in exits(cell, axis, pipe_type):
-                baked = _bake_escape_geometry((x, y, z), t_kind, chain + (exit_step,))
+                baked = _bake_free_magic_geometry((x, y, z), t_kind, chain + (exit_step,))
                 if baked is not None:
                     return baked
             for next_axis in range(3):
@@ -1000,46 +984,46 @@ class EscapeCompiler(Compiler):
                     queue.append((state, chain + ((cell, nbr, next_axis, next_type),)))
         return None
 
-    def t_gate_escape_plan(self, x, y, z):
-        '''The baked escape geometry for a T-gate at this cube, or None. Cached per routed_cubes version, since
+    def t_gate_free_magic_plan(self, x, y, z):
+        '''The baked free-magic geometry for a T-gate at this cube, or None. Cached per routed_cubes version, since
         a column scan asks about many heights and the placement asks again about the one it settles on.'''
-        key = (_VersionedSet.version, x, y, z, len(self.escape_port_cells))
-        if key not in self._escape_plan_cache:
-            self._escape_plan_cache.clear()
+        key = (_VersionedSet.version, x, y, z, len(self.free_magic_port_cells))
+        if key not in self._free_magic_plan_cache:
+            self._free_magic_plan_cache.clear()
             injection_axis = 1 if self.hadamard_parity(x, y, z) == 1 else 0
             red_faces = ((x, y - 1, z), (x, y + 1, z)) if injection_axis else ((x - 1, y, z), (x + 1, y, z))
-            if all(self.t_gate_escape_route(cell) is None for cell in red_faces):
-                self._escape_plan_cache[key] = None
+            if all(self.t_gate_free_magic_route(cell) is None for cell in red_faces):
+                self._free_magic_plan_cache[key] = None
             else:
-                self._escape_plan_cache[key] = self.bake_t_gate_escape(x, y, z)
-        return self._escape_plan_cache[key]
+                self._free_magic_plan_cache[key] = self.bake_t_gate_free_magic(x, y, z)
+        return self._free_magic_plan_cache[key]
 
     def _t_spider_entries(self, spider_positions, resolved_circuit_events, payload_spider_positions):
-        """The escape variant never wrote per-T-event spider records."""
+        """The free-magic variant never wrote per-T-event spider records."""
         return {}
 
-    def _escape_pickle_entries(self):
-        return {"t_gate_escape_paths": {int(event): tuple(tuple(int(c) for c in cell) for cell in route)
-                                        for event, route in self.t_gate_escape_paths.items() if route},
-                "t_gate_escape_ports": {str(label): (tuple(int(c) for c in port), tuple(int(c) for c in neighbour))
-                                        for label, port, neighbour in self.t_escape_ports}}
+    def _free_magic_pickle_entries(self):
+        return {"t_gate_free_magic_paths": {int(event): tuple(tuple(int(c) for c in cell) for cell in route)
+                                        for event, route in self.t_gate_free_magic_paths.items() if route},
+                "t_gate_free_magic_ports": {str(label): (tuple(int(c) for c in port), tuple(int(c) for c in neighbour))
+                                        for label, port, neighbour in self.t_free_magic_ports}}
 
     def _add_machinery(self, graph):
-        """S-gate machinery and T-gate escape routes go to the adapter together, plus the open ports."""
-        if set(self.s_machinery_cubes) & set(self.t_escape_cubes):
-            raise RuntimeError(f'S-gate machinery and a T-gate escape route claim the same cubes: {sorted(set(self.s_machinery_cubes) & set(self.t_escape_cubes))}')
-        graph["machinery_cubes"] = {**self.s_machinery_cubes, **self.t_escape_cubes}
-        graph["machinery_pipes"] = tuple(self.s_machinery_pipes) + tuple(self.t_escape_pipes)
-        graph["extra_ports"] = tuple(self.t_escape_ports)
+        """S-gate machinery and T-gate free-magic routes go to the adapter together, plus the open ports."""
+        if set(self.s_machinery_cubes) & set(self.t_free_magic_cubes):
+            raise RuntimeError(f'S-gate machinery and a T-gate free-magic route claim the same cubes: {sorted(set(self.s_machinery_cubes) & set(self.t_free_magic_cubes))}')
+        graph["machinery_cubes"] = {**self.s_machinery_cubes, **self.t_free_magic_cubes}
+        graph["machinery_pipes"] = tuple(self.s_machinery_pipes) + tuple(self.t_free_magic_pipes)
+        graph["extra_ports"] = tuple(self.t_free_magic_ports)
 
 
-VARIANTS = {'basic': Compiler, 'escape': EscapeCompiler}
+VARIANTS = {'basic': Compiler, 'free_magic': FreeMagicCompiler}
 
 
 def parse_arguments(argv = None):
-    cli = argparse.ArgumentParser(description = "Part A compiler: compiler_basic_ws.py behaviour by default, compiler_basic_ws_escape.py with --variant escape.")
+    cli = argparse.ArgumentParser(description = "Part A compiler: cultivation-aware behaviour by default, free-magic with --variant free_magic.")
     cli.add_argument('--variant', choices = tuple(VARIANTS), default = 'basic', help = 'which original compiler to reproduce (default: basic)')
-    cli.add_argument('--circuit', default = None, help = 'benchmark name (read from benchmark/<name>.qasm) or the path of a .qasm file (default: adder_4q for basic, graphstate_100 for escape)')
+    cli.add_argument('--circuit', default = None, help = 'benchmark name (read from benchmark/<name>.qasm) or the path of a .qasm file (default: adder_4q for basic, graphstate_100 for free_magic)')
     cli.add_argument('--html', action = 'store_true', help = 'also write the block-graph HTML (default: off; pickle and JSON are always written)')
     return cli.parse_args(argv)
 
@@ -1048,7 +1032,7 @@ def main(argv = None):
     start_dir = Path.cwd()
     args = parse_arguments(argv)
     compiler_class = VARIANTS[args.variant]
-    circuit_name = args.circuit or compiler_class.DEFAULT_CIRCUIT
+    circuit_name = args.circuit
     qasm_path = start_dir / circuit_name if circuit_name.endswith('.qasm') else _SRC.parent / 'benchmark' / f'{circuit_name}.qasm'
     os.chdir(_SRC)
     compiler_class(pyzx.Circuit.load(qasm_path), maxflow_accelerator, write_html = args.html).run()

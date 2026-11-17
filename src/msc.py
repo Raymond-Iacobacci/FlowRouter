@@ -113,7 +113,7 @@ prepaid_layers = 0 # layers a fold inserted whose cycles the fractional loop has
 # --> bloated code
 baked_cubes = set()
 # <-- bloated code
-escape_reserved = {} # T event -> the (x, y) square held for its injection route. A square rather than a cell: a gate and its escape rise together, and it is the square whose column has to stay clear for the cultivation under it to finish
+backup_t_injection_reserved = {} # T event -> the (x, y) square held for its injection route. A square rather than a cell: a gate and its backup T-injection cube rise together, and it is the square whose column has to stay clear for the cultivation under it to finish
 machinery_cells = {} # cell -> the T event whose injection machinery occupies it. Every membership test reads it exactly as the old set did; the value is what lets _eliminate find a deleted gate's machinery, which a bare set could never answer
 conditional_markers = []
 def terminal_cube_kind(pipe_kind):
@@ -138,31 +138,31 @@ def available_reservation_blocks(gate_pos, is_free, kinds):
 def reserved_cells(exclude_events):
     """The cells other pending T-gates hold for their own injection routes.
 
-    A held square is read at its owner's current z, because a gate and its escape rise together. The
-    caller passes its own events in `exclude_events`: a gate has to see its own escape as free, or
+    A held square is read at its owner's current z, because a gate and its backup T-injection cube rise together. The
+    caller passes its own events in `exclude_events`: a gate has to see its own backup T-injection cube as free, or
     available_reservation_blocks would report it boxed in by its own reservation."""
     exclude = set(exclude_events)
     return {square + (tuple(payload['t_gate_positions'][ev])[2],)
-            for ev, square in escape_reserved.items()
+            for ev, square in backup_t_injection_reserved.items()
             if ev not in exclude and ev in payload['t_gate_positions']}
 
-def reserve_escapes():
+def reserve_backup_t_injection_cubes():
     """One square per pending T-gate, held until that gate delivers.
 
     This replaces the old rule that protected a cell only once it was some gate's LAST free
-    neighbour. Protecting at the last moment protects nothing: a gate loses its escapes one at a
+    neighbour. Protecting at the last moment protects nothing: a gate loses its backup T-injection cubes one at a
     time to other gates' routes, and by the time the rule notices, the column under the survivor has
     already been built on.
 
     A SQUARE is held, not a cell. The walk only ever grows the circuit upward, so a square nothing
     may build on keeps the column under it clear while `height` climbs, and the cultivation there
     then finishes once that column is deep enough. Re-picking a square every pass would restart that
-    accumulation, so a held one is kept for as long as it is still a legal escape.
+    accumulation, so a held one is kept for as long as it is still a legal backup T-injection cube.
 
     Gates are served in event order, so the assignment is re-derived identically on every pass."""
     kinds = {tuple(c['position']): c['kind'] for c in graph['cubes']}
-    for ev in [e for e in escape_reserved if e not in payload['t_gate_positions']]:
-        escape_reserved.pop(ev) # delivered or deleted: the square goes back before anyone else asks
+    for ev in [e for e in backup_t_injection_reserved if e not in payload['t_gate_positions']]:
+        backup_t_injection_reserved.pop(ev) # delivered or deleted: the square goes back before anyone else asks
     geometry_free = lambda c: (0 <= c[0] < nx and 0 <= c[1] < ny and c not in kinds and c not in baked_cubes and c not in machinery_cells)
     candidates = {ev: [tuple(b) for b in available_reservation_blocks(tuple(position), geometry_free, kinds)] for ev, position in payload['t_gate_positions'].items()}
     # A cell that is some gate's ONLY candidate is that gate's last one. Handing it to anybody else
@@ -176,14 +176,14 @@ def reserve_escapes():
     _res_total = _c.Counter()  # cell -> how many events hold it
     _res_bycol = _c.Counter()  # (cell, column) -> how many events of that column hold it
     def _res_add(e):
-        cell = tuple(escape_reserved[e]) + (_res_z[e],)
+        cell = tuple(backup_t_injection_reserved[e]) + (_res_z[e],)
         _res_total[cell] += 1
         _res_bycol[(cell, _res_col[e])] += 1
     def _res_drop(e):
-        cell = tuple(escape_reserved[e]) + (_res_z[e],)
+        cell = tuple(backup_t_injection_reserved[e]) + (_res_z[e],)
         _res_total[cell] -= 1
         _res_bycol[(cell, _res_col[e])] -= 1
-    for _e in escape_reserved: # every key is in t_gate_positions: the stale ones were popped above
+    for _e in backup_t_injection_reserved: # every key is in t_gate_positions: the stale ones were popped above
         _res_add(_e)
     for ev, position in sorted((e, tuple(v)) for e, v in payload['t_gate_positions'].items()):
         mine = candidates[ev]
@@ -195,18 +195,18 @@ def reserve_escapes():
         # cell that does not exist yet, and the walk's answer delay.
         pick = ([c for c in mine if _res_total[c] == _res_bycol[(c, _mycol)] and last_cube.get(c, ev) == ev]
                 or [c for c in mine if _res_total[c] == _res_bycol[(c, _mycol)]])
-        held = escape_reserved.get(ev)
+        held = backup_t_injection_reserved.get(ev)
         if held is not None and any(c[:2] == held for c in pick):
             continue # still legal where the gate now stands: keep it, and keep the column under it
         if pick:
-            if ev in escape_reserved:
+            if ev in backup_t_injection_reserved:
                 _res_drop(ev)
-            escape_reserved[ev] = tuple(min(pick)[:2]) # exactly one cube, never a set
+            backup_t_injection_reserved[ev] = tuple(min(pick)[:2]) # exactly one cube, never a set
             _res_add(ev)
         else:
-            if ev in escape_reserved:
+            if ev in backup_t_injection_reserved:
                 _res_drop(ev)
-            escape_reserved.pop(ev, None) # no free geometry at all: a delay has to open a cell first
+            backup_t_injection_reserved.pop(ev, None) # no free geometry at all: a delay has to open a cell first
 
 def _column_hadamard_walls(xy):
     """{upper-endpoint z -> segment} for every Hadamard wall in this column. The upper
@@ -380,22 +380,22 @@ def stack_reflow(xy, gate_z): # Combines both commutative_stack and xy since com
     if not commutative_stack:
         return None
     z_walk = gate_z
-    def has_escape(cell, protected, kind = None):
+    def has_backup_t_injection_cube(cell, protected, kind = None):
         cell = tuple(cell)
         kinds = {tuple(c["position"]): c["kind"] for c in graph["cubes"]}
         kind = kinds.get(cell) if kind is None else kind
         if kind is None or kind == "PORT":
             return None
         used = set(kinds) | set(baked_cubes) | set(machinery_cells)
-        # Only claims NOT listed in `protected` block the escape.
+        # Only claims NOT listed in `protected` block the backup T-injection cube.
         outside_claims = protected
         for axis in (0, 1):
             if kind[axis] != 'X':
                 continue
             for sign in (-1, 1):
-                escape = tuple(value + (sign if i == axis else 0) for i, value in enumerate(cell))
-                if(0 <= escape[0] < nx and 0 <= escape[1] < ny and escape not in used and escape not in outside_claims):
-                    return escape
+                backup_cube = tuple(value + (sign if i == axis else 0) for i, value in enumerate(cell))
+                if(0 <= backup_cube[0] < nx and 0 <= backup_cube[1] < ny and backup_cube not in used and backup_cube not in outside_claims):
+                    return backup_cube
         return None
 
     assert commutative_stack == sorted(commutative_stack, key=lambda member: member['index'])
@@ -422,7 +422,7 @@ def stack_reflow(xy, gate_z): # Combines both commutative_stack and xy since com
             return False
         if not _cell_legal(cell, column_cells):
             return False
-        return has_escape(cell, protected) is not None
+        return has_backup_t_injection_cube(cell, protected) is not None
     placements = {}
     floor_z = gate_z + 1
     for member in commutative_stack:
@@ -446,7 +446,7 @@ def stack_reflow(xy, gate_z): # Combines both commutative_stack and xy since com
         return None # This is <= because if the delaying gate can't be rehoused then the whole thing breaks. NOTE: I'm not sure if this is correct if we have multiple T-gates at the same location -- would they all be forced to undergo this even if only one is delaying (because of resource contention issues)?
 
     # The wall moves below flip the basis of every cube a wall passes over, so a destination cube's
-    # X-faces after the reflow can point at different lanes than the ones has_escape just checked.
+    # X-faces after the reflow can point at different lanes than the ones has_backup_t_injection_cube just checked.
     # Count how many times each cell is flipped and re-check every blue destination on its post-flip kind.
     flips = _c.Counter()
     for wall_z, leg_z, pair in pushes:
@@ -469,7 +469,7 @@ def stack_reflow(xy, gate_z): # Combines both commutative_stack and xy since com
         if cube is None or cube['kind'] == 'PORT':
             continue
         flipped = ''.join('Z' if ch == 'X' else ('X' if ch == 'Z' else ch) for ch in cube['kind'])
-        if has_escape(cell, protected, kind = flipped) is None:
+        if has_backup_t_injection_cube(cell, protected, kind = flipped) is None:
             return None
 
     for wall_z, leg_z, pair in pushes:
@@ -549,7 +549,7 @@ def attach_y_half_cube(route, root, owner_event, kinds, pipe_dirs):
         queue.append((anchor, anchor_kind, frozenset(pipe_dirs.get(anchor,())), []))
     chosen = None
 
-    protected = reserved_cells([owner_event]) # same rule as the delivery route: only the gate whose machinery this is may see its own escape as free. Keyed by cell it exempted every co-located gate too, so the machinery chain was free to bake over their reserved cubes
+    protected = reserved_cells([owner_event]) # same rule as the delivery route: only the gate whose machinery this is may see its own backup T-injection cube as free. Keyed by cell it exempted every co-located gate too, so the machinery chain was free to bake over their reserved cubes
 
     def cell_free(cell):
         return 0 <= cell[0] < nx and 0 <= cell[1] < ny and cell[2] >= route[0][2] and cell not in occupied and cell not in protected
@@ -644,11 +644,11 @@ def _seat(ev, cell):
 
 
 def _delay_gate(position):
-    """Move this T-gate to the lowest cell above the one it stands on that still has a free escape.
+    """Move this T-gate to the lowest cell above the one it stands on that still has a free backup T-injection cube.
     -> did it move?
 
     The candidates are the cells of the gate's own column, bounded by the first 2-qubit spider its
-    commuting stack cannot pass. The destination has to have an escape, and that is the whole of the
+    commuting stack cannot pass. The destination has to have a backup T-injection cube, and that is the whole of the
     guarantee: the walk grows the circuit only upward, so the column under a held square keeps
     clearing and the cultivation there finishes once it is deep enough.
 
@@ -722,7 +722,7 @@ def step_one_height():
                 ev = next(e for e in pos_to_events[gate_pos] if 'C' not in routedness[e][1])
 
                 _route_view_free = lambda c: 0 <= c[0] < nx and 0 <= c[1] < ny and c not in current_height_cubes and c not in next_height_cubes and c not in baked_cubes
-                protected_cells = reserved_cells([ev]) # keyed to the gate being DELIVERED, not to its cube. The exemption exists so a gate sees its own escape as free; keyed by cell it also exempted every other ©ate standing on that cube, and a cube can hold more than one T-gate. That is how a delivery ate a co-located gate's reserved escape and left it with nothing to inject through
+                protected_cells = reserved_cells([ev]) # keyed to the gate being DELIVERED, not to its cube. The exemption exists so a gate sees its own backup T-injection cube as free; keyed by cell it also exempted every other ©ate standing on that cube, and a cube can hold more than one T-gate. That is how a delivery ate a co-located gate's reserved backup T-injection cube and left it with nothing to inject through
 
                 _gate_horiz_axes = {a for a, _ in _pipe_dirs_by_endpoint.get(gate_pos, ())} - {2}
                 visited = set([gate_pos])
@@ -893,14 +893,14 @@ def step_one_height():
                     undelivered_fractional_ticks = 0
     delay_whole_circuit = False
 
-    # reserve_escapes runs again here because this pass has baked geometry since the assignment at the
+    # reserve_backup_t_injection_cubes runs again here because this pass has baked geometry since the assignment at the
     # top of it -- deliveries, machinery, the drain above -- and the assignment that matters is the one
     # that holds now.
-    reserve_escapes()
+    reserve_backup_t_injection_cubes()
     # Only a gate the walk is about to act on can be helped by delaying: a gate parked far above the
     # frontier has no geometry around it yet, so "holds nothing" says nothing about it and blocking on
     # it delays forever.
-    _unheld = sorted(e for e, v in payload['t_gate_positions'].items() if e not in escape_reserved and tuple(v)[2] <= height)
+    _unheld = sorted(e for e, v in payload['t_gate_positions'].items() if e not in backup_t_injection_reserved and tuple(v)[2] <= height)
     if _unheld:
         delay_whole_circuit = True
     if delay_whole_circuit or any(position[2] == height and event_idx for position, event_idx in pos_to_events.items()):
@@ -1024,12 +1024,12 @@ def step_one_height():
             })
             if tuple(vertical_pipe['u'][:3]) in machinery_cells or tuple(vertical_pipe['v'][:3]) in machinery_cells:
                 machinery_cells[tuple(_passthrough_position)] = machinery_cells.get(tuple(vertical_pipe['u'][:3]), machinery_cells.get(tuple(vertical_pipe['v'][:3]))) # a passthrough extending a machinery leg is itself machinery, owned by the same T event
-        reserve_escapes()
-        if any(e not in escape_reserved for e, v in payload['t_gate_positions'].items() if v[2] <= height + 1):
+        reserve_backup_t_injection_cubes()
+        if any(e not in backup_t_injection_reserved for e, v in payload['t_gate_positions'].items() if v[2] <= height + 1):
             return 'repeat'
         # The walk must not advance past a gate it left standing: a cell below the frontier is one
         # nothing ever looks at again. Repeating buys the room -- each fold inserts an empty layer
-        # above the gate -- and the escape reservation is what makes that terminate, since every fold
+        # above the gate -- and the backup T-injection cube reservation is what makes that terminate, since every fold
         # raises `height` off a held square whose column nothing may build on.
         if any(v[2] == height for v in payload['t_gate_positions'].values()):
             return 'repeat' # old while-level continue: re-decide this layer without advancing
